@@ -189,7 +189,7 @@ myumap = {
 }
 
 
-def transform(location_strs, umap=myumap, index=[], cut=False, lookahead=8, pos_sensitive=False, open_warning=False):
+def transform(location_strs, umap=myumap, index=[], cut=False, lookahead=8, pos_sensitive=False, open_warning=False, sequential=False):
     """将地址描述字符串转换以"省","市","区"信息为列的DataFrame表格
         Args:
             locations:地址描述字符集合,可以是list, Series等任意可以进行for in循环的集合
@@ -214,10 +214,10 @@ def transform(location_strs, umap=myumap, index=[], cut=False, lookahead=8, pos_
             'location_strs参数必须为可迭代的类型(比如list, Series等实现了__iter__方法的对象)')
 
     result = pd.DataFrame(
-        [_handle_one_record(addr, umap, cut, lookahead, pos_sensitive, open_warning) for addr in location_strs],
+        [_handle_one_record(addr, umap, cut, lookahead, pos_sensitive, open_warning, sequential) for addr in location_strs],
         index=index) \
         if index else pd.DataFrame(
-        [_handle_one_record(addr, umap, cut, lookahead, pos_sensitive, open_warning) for addr in location_strs])
+        [_handle_one_record(addr, umap, cut, lookahead, pos_sensitive, open_warning, sequential) for addr in location_strs])
     # 这句的唯一作用是让列的顺序好看一些
     if pos_sensitive:
         return result.loc[:, ('省', '市', '区', '地址', '省_pos', '市_pos', '区_pos')]
@@ -225,7 +225,7 @@ def transform(location_strs, umap=myumap, index=[], cut=False, lookahead=8, pos_
         return result.loc[:, ('省', '市', '区', '地址')]
 
 
-def _handle_one_record(addr, umap, cut, lookahead, pos_sensitive, open_warning):
+def _handle_one_record(addr, umap, cut, lookahead, pos_sensitive, open_warning, sequential):
     """处理一条记录"""
 
     # 空记录
@@ -238,7 +238,7 @@ def _handle_one_record(addr, umap, cut, lookahead, pos_sensitive, open_warning):
         return empty
 
     # 地名提取
-    pca, left_addr = _extract_addr(addr, cut, lookahead)
+    pca, left_addr = _extract_addr(addr, cut, lookahead, sequential)
     # 填充市
     _fill_city(pca, umap, open_warning)
     # 填充省
@@ -280,7 +280,7 @@ def _fill_city(pca, umap, open_warning):
             logging.warning("%s 无法映射, 建议添加进umap中", pca.area)
 
 
-def _extract_addr(addr, cut, lookahead):
+def _extract_addr(addr, cut, lookahead, sequential):
     """提取地址中的省,市,区名称
        Args:
            addr:原始地址字符串
@@ -288,10 +288,10 @@ def _extract_addr(addr, cut, lookahead):
        Returns:
            [sheng, shi, qu, (sheng_pos, shi_pos, qu_pos)], addr
     """
-    return _jieba_extract(addr) if cut else _full_text_extract(addr, lookahead)
+    return _jieba_extract(addr, sequential) if cut else _full_text_extract(addr, lookahead, sequential)
 
 
-def _jieba_extract(addr):
+def _jieba_extract(addr, sequential):
     """基于结巴分词进行提取"""
     import jieba
     result = Pca()
@@ -300,7 +300,18 @@ def _jieba_extract(addr):
 
     def _set_pca(pca_property, name, full_name):
         """pca_property: 'province', 'city' or 'area'"""
-        if not getattr(result, pca_property):
+        in_order = True
+        if sequential:
+            property_orders = [ 'province', 'city', 'area' ]
+            if pca_property in property_orders:
+                property_index = property_orders.index(pca_property)
+                sub_properties = property_orders[(property_index + 1):]
+                for property in sub_properties:
+                    if len(getattr(result, property)) > 0:
+                        in_order = False
+                        break
+
+        if (not getattr(result, pca_property)) and in_order:
             setattr(result, pca_property, full_name)
             setattr(result, pca_property + "_pos", pos)
             if is_munis(full_name):
@@ -326,7 +337,7 @@ def _jieba_extract(addr):
 filter_address_chars = ['路', '街', '村', '桥']
 
 
-def _full_text_extract(addr, lookahead):
+def _full_text_extract(addr, lookahead, sequential):
     """全文匹配进行提取"""
     result = Pca()
     truncate = 0
@@ -335,7 +346,18 @@ def _full_text_extract(addr, lookahead):
         """pca_property: 'province', 'city' or 'area'"""
 
         def _defer_set():
-            if not getattr(result, pca_property):
+            in_order = True
+            if sequential:
+                property_orders = [ 'province', 'city', 'area' ]
+                if pca_property in property_orders:
+                    property_index = property_orders.index(pca_property)
+                    sub_properties = property_orders[(property_index + 1):]
+                    for property in sub_properties:
+                        if len(getattr(result, property)) > 0:
+                            in_order = False
+                            break
+
+            if (not getattr(result, pca_property)) and in_order:
                 setattr(result, pca_property, full_name)
                 setattr(result, pca_property + "_pos", pos)
                 if is_munis(full_name):
